@@ -1,0 +1,14 @@
+pyproject.toml
+operations_agent/__init__.py
+operations_agent/agent.py
+operations_agent/anthropic_client.py
+operations_agent/cli.py
+operations_agent/clients.py
+operations_agent/models.py
+operations_agent.egg-info/PKG-INFO
+operations_agent.egg-info/SOURCES.txt
+operations_agent.egg-info/dependency_links.txt
+operations_agent.egg-info/entry_points.txt
+operations_agent.egg-info/requires.txt
+operations_agent.egg-info/top_level.txt
+tests/test_agent.py

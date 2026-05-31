@@ -17,7 +17,7 @@ The wow is the **reasoning loop + the eval harness** — NOT integration breadth
 ## Deliverable
 
 - Local **Python** repo, real APIs, strong README + demo video. Not hosted.
-- Audience: recruiters at tech companies, specifically AI/ML roles.
+- Audience: recruiters at tech companies, specifically AI/ML, LLMS or IT roles.
 
 ## The reasoning core
 

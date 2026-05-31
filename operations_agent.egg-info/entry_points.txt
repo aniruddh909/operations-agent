@@ -1,0 +1,2 @@
+[console_scripts]
+triage = operations_agent.cli:main
