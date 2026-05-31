@@ -8,6 +8,8 @@ skills-lock.json
 .claude/
 skills-lock.json
 
+context.md
+PRD.md
 .env
 __pycache__/
 *.pyc
