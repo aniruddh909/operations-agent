@@ -1,0 +1,18 @@
+# Skill tooling — local only, not part of the project
+.agents/
+.claude/
+skills-lock.json
+
+# Skill tooling — local only, not part of the project
+.agents/
+.claude/
+skills-lock.json
+
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+traces/*.json
+!traces/sample-redacted.json
+.DS_Store
