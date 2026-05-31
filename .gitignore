@@ -16,3 +16,6 @@ venv/
 traces/*.json
 !traces/sample-redacted.json
 .DS_Store
+*.egg-info/
+build/
+dist/

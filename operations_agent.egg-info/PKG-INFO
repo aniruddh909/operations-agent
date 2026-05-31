@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: operations-agent
-Version: 0.1.0
-Summary: AI Product Operations Agent — a bug-triage reasoning agent
-Requires-Python: >=3.11
-Requires-Dist: anthropic>=0.40
-Requires-Dist: pydantic>=2.6
-Provides-Extra: dev
-Requires-Dist: pytest>=8.0; extra == "dev"
