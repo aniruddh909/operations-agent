@@ -52,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Replay model responses from a cassette (no model API calls).",
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Render the agent's reasoning live in the terminal (Rich view).",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -78,11 +83,22 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_dedup:
         duplicates = _build_duplicate_checker(settings)
 
-    human = CliHumanClient()  # asks via stdin when the gate needs clarification
+    if args.live:
+        from .render import live_render
 
-    trace = run_triage(
-        bug, model=model, jira=jira, duplicates=duplicates, human=human
-    )
+        with live_render() as renderer:
+            # The renderer is both the live observer and the human (it pauses
+            # the display to ask a clarifying question, then resumes).
+            trace = run_triage(
+                bug, model=model, jira=jira, duplicates=duplicates,
+                human=renderer, observer=renderer,
+            )
+    else:
+        human = CliHumanClient()  # asks via stdin
+        trace = run_triage(
+            bug, model=model, jira=jira, duplicates=duplicates, human=human
+        )
+
     print(trace.model_dump_json(indent=2))
     return 0 if trace.status and trace.status.value == "completed" else 1
 

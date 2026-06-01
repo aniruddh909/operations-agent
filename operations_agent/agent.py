@@ -107,6 +107,7 @@ def run_triage(
     duplicates: DuplicateChecker | None = None,
     human: HumanClient | None = None,
     retry_config: RetryConfig | None = None,
+    observer: Callable[[Trace], None] | None = None,
 ) -> Trace:
     """Triage one bug report end-to-end, returning the full Trace.
 
@@ -117,8 +118,13 @@ def run_triage(
     (Slice 4) -> optional clarifying question to a human -> plan -> execute. A
     clear duplicate short-circuits before any filing; newly filed tickets are
     embedded into the index (embed-on-ingest).
+
+    ``observer`` is an optional callback fired after each Trace mutation (used by
+    the live renderer); the Trace stays the single source of truth.
     """
     trace = Trace(bug_report=bug_report)
+    if observer is not None:
+        trace.observe(observer)
 
     verdict: DuplicateVerdict | None = None
     if duplicates is not None:
