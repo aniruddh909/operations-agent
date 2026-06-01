@@ -40,6 +40,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip duplicate detection (no embedding model / index needed).",
     )
+    parser.add_argument(
+        "--record",
+        metavar="CASSETTE",
+        default=None,
+        help="Record model responses to a cassette file for later replay.",
+    )
+    parser.add_argument(
+        "--replay",
+        metavar="CASSETTE",
+        default=None,
+        help="Replay model responses from a cassette (no model API calls).",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -52,6 +64,15 @@ def main(argv: list[str] | None = None) -> int:
     except MissingConfigError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
+
+    if args.replay:
+        from .replay import ReplayModelClient
+
+        model = ReplayModelClient(args.replay)
+    elif args.record:
+        from .replay import RecordingModelClient
+
+        model = RecordingModelClient(model, args.record)
 
     duplicates = None
     if not args.no_dedup:

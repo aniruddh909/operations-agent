@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .errors import SemanticError, ToolError, TransientError, classify_status
+
 # Maps our internal priority vocabulary to Jira priority names.
 DEFAULT_PRIORITY_MAP = {
     "P0": "Highest",
@@ -21,16 +23,10 @@ DEFAULT_PRIORITY_MAP = {
 }
 
 
-class JiraError(RuntimeError):
-    """Raised when Jira returns an error response.
-
-    Slice 5 will distinguish transient (retry) from semantic (re-plan) errors;
-    for now this surfaces a readable message and the HTTP status.
-    """
-
-    def __init__(self, status: int, message: str) -> None:
-        self.status = status
-        super().__init__(f"Jira {status}: {message}")
+# Back-compat alias: existing call sites/tests refer to JiraError. It is now the
+# generic ToolError base; the client raises the more specific Transient/Semantic
+# subclasses, which are themselves ToolErrors.
+JiraError = ToolError
 
 
 class JiraCloudClient:
@@ -92,9 +88,9 @@ class JiraCloudClient:
                 labels.append(f"component-{_slug(component)}")
             fields["labels"] = labels
 
-        resp = self._client.post("/rest/api/3/issue", json={"fields": fields})
+        resp = self._request("POST", "/rest/api/3/issue", json={"fields": fields})
         if resp.status_code >= 400:
-            raise JiraError(resp.status_code, resp.text)
+            raise classify_status(resp.status_code, resp.text)
 
         data = resp.json()
         key = data.get("key")
@@ -126,9 +122,9 @@ class JiraCloudClient:
             }
             if next_token:
                 params["nextPageToken"] = next_token
-            resp = self._client.get("/rest/api/3/search/jql", params=params)
+            resp = self._request("GET", "/rest/api/3/search/jql", params=params)
             if resp.status_code >= 400:
-                raise JiraError(resp.status_code, resp.text)
+                raise classify_status(resp.status_code, resp.text)
             data = resp.json()
             for issue in data.get("issues", []):
                 fields = issue.get("fields", {})
@@ -143,6 +139,19 @@ class JiraCloudClient:
             if not next_token or data.get("isLast", True):
                 break
         return results
+
+    def _request(self, method: str, url: str, **kwargs):
+        """Issue a request, mapping network-level failures to TransientError.
+
+        Timeouts and connection errors are transient by nature, so they become
+        TransientError (retryable below the loop) rather than crashing the run.
+        """
+        import httpx
+
+        try:
+            return self._client.request(method, url, **kwargs)
+        except (httpx.TimeoutException, httpx.TransportError) as err:
+            raise TransientError(None, f"network error: {err}") from err
 
     def close(self) -> None:
         self._client.close()

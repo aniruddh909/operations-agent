@@ -210,8 +210,11 @@ class EventType(str, Enum):
     PLAN_PROPOSED = "plan_proposed"
     PLAN_REPAIR = "plan_repair"
     STEP_STARTED = "step_started"
+    STEP_RETRY = "step_retry"
     STEP_COMPLETED = "step_completed"
     STEP_FAILED = "step_failed"
+    REFLECTION = "reflection"
+    PLAN_REVISED = "plan_revised"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
 

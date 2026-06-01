@@ -19,8 +19,12 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
+import time
+from typing import Callable
+
 from .clients import HumanClient, JiraClient, ModelClient
 from .duplicates import find_duplicate
+from .errors import SemanticError, TransientError
 from .evidence import collect_evidence
 from .gate import gate
 from .index import IndexedTicket, TicketIndex
@@ -36,6 +40,19 @@ from .models import (
     StepStatus,
     Trace,
 )
+from .retry import call_with_retry
+
+MAX_REFLECTIONS = 2
+
+
+@dataclass
+class RetryConfig:
+    """Tuning for the transient-retry tier. ``sleep`` is injectable for tests."""
+
+    max_retries: int = 3
+    base_delay: float = 0.5
+    max_delay: float = 8.0
+    sleep: Callable[[float], None] = time.sleep
 
 
 @dataclass
@@ -89,6 +106,7 @@ def run_triage(
     jira: JiraClient,
     duplicates: DuplicateChecker | None = None,
     human: HumanClient | None = None,
+    retry_config: RetryConfig | None = None,
 ) -> Trace:
     """Triage one bug report end-to-end, returning the full Trace.
 
@@ -168,7 +186,14 @@ def run_triage(
         return trace
 
     trace.plan = plan
-    _execute_plan(plan, jira=jira, trace=trace, duplicates=duplicates)
+    _execute_plan(
+        plan,
+        model=model,
+        jira=jira,
+        trace=trace,
+        duplicates=duplicates,
+        retry_config=retry_config,
+    )
     return trace
 
 
@@ -267,18 +292,70 @@ def _propose_plan(
 def _execute_plan(
     plan: Plan,
     *,
+    model: ModelClient,
     jira: JiraClient,
     trace: Trace,
     duplicates: DuplicateChecker | None = None,
+    retry_config: RetryConfig | None = None,
 ) -> None:
-    for step in plan.steps:
+    """Execute the plan step by step, with two-tier error handling.
+
+    - Transient failures (timeouts, 429, 5xx) are retried with backoff *inside*
+      the step; the agent never sees them.
+    - Semantic failures (409/400/403) are surfaced to the model, which reflects
+      and rewrites the remaining steps. Capped at ``MAX_REFLECTIONS`` rounds.
+    """
+    retry_config = retry_config or RetryConfig()
+    reflections = 0
+    i = 0
+    while i < len(plan.steps):
+        step = plan.steps[i]
         step.status = StepStatus.IN_PROGRESS
         trace.record(
             EventType.STEP_STARTED, step.intent, step_id=step.id, tool=step.tool
         )
+
         try:
-            result = _run_step(step, jira=jira)
-        except Exception as err:  # noqa: BLE001 - recorded, run continues to fail
+            result = _run_step_with_retry(
+                step, jira=jira, trace=trace, retry_config=retry_config
+            )
+        except SemanticError as err:
+            # Reality diverged in a way the agent should reason about.
+            step.status = StepStatus.FAILED
+            step.result = {"error": str(err), "status": err.status}
+            trace.record(
+                EventType.STEP_FAILED,
+                f"Semantic failure ({err.status}): {err.message}",
+                step_id=step.id,
+                tool=step.tool,
+                status=err.status,
+            )
+            if reflections >= MAX_REFLECTIONS:
+                trace.finish(
+                    RunStatus.FAILED, failed_step=step.id, error=str(err)
+                )
+                trace.record(
+                    EventType.RUN_FAILED,
+                    "Reflection limit reached; aborting.",
+                )
+                return
+            reflections += 1
+            revised = _reflect_and_revise(
+                plan, failed_index=i, error=err, model=model, trace=trace
+            )
+            if revised is None:
+                trace.finish(
+                    RunStatus.FAILED, failed_step=step.id, error=str(err)
+                )
+                trace.record(
+                    EventType.RUN_FAILED, "Reflection produced no usable plan."
+                )
+                return
+            # Replace remaining steps with the revised ones and continue.
+            plan.steps = plan.steps[: i + 1] + revised
+            i += 1
+            continue
+        except Exception as err:  # noqa: BLE001 - unknown failure, abort cleanly
             step.status = StepStatus.FAILED
             step.result = {"error": str(err)}
             trace.record(
@@ -311,10 +388,90 @@ def _execute_plan(
                     text=result.get("description", ""),
                 )
             )
+        i += 1
 
-    last = plan.steps[-1].result if plan.steps else {}
+    done = [s for s in plan.steps if s.status is StepStatus.DONE]
+    last = done[-1].result if done else {}
     trace.finish(RunStatus.COMPLETED, ticket=last)
     trace.record(EventType.RUN_COMPLETED, "Triage complete.", ticket=last)
+
+
+def _run_step_with_retry(
+    step: PlanStep,
+    *,
+    jira: JiraClient,
+    trace: Trace,
+    retry_config: RetryConfig,
+) -> dict:
+    """Run one step, retrying transient failures below the loop."""
+
+    def on_retry(attempt: int, err: TransientError, delay: float) -> None:
+        trace.record(
+            EventType.STEP_RETRY,
+            f"Transient failure ({err.status}); retry {attempt} after {delay}s.",
+            step_id=step.id,
+            attempt=attempt,
+            status=err.status,
+        )
+
+    return call_with_retry(
+        lambda: _run_step(step, jira=jira),
+        max_retries=retry_config.max_retries,
+        base_delay=retry_config.base_delay,
+        max_delay=retry_config.max_delay,
+        sleep=retry_config.sleep,
+        on_retry=on_retry,
+    )
+
+
+def _reflect_and_revise(
+    plan: Plan,
+    *,
+    failed_index: int,
+    error: SemanticError,
+    model: ModelClient,
+    trace: Trace,
+) -> list[PlanStep] | None:
+    """Ask the model to rewrite the remaining steps given the failure.
+
+    The failed step's outcome is fed back as context. The model returns a new
+    list of steps to run *after* the failed one (which may be empty if the right
+    move is to stop — e.g. the ticket already exists).
+    """
+    trace.record(
+        EventType.REFLECTION,
+        f"Reflecting on {error.status} failure at step {failed_index}.",
+        status=error.status,
+    )
+    remaining = plan.steps[failed_index + 1 :]
+    revise_system = (
+        "A step in your plan failed with a meaningful error. Decide how to "
+        "proceed: submit a revised list of the REMAINING steps to run. If the "
+        "error means no further action is needed (e.g. the ticket already "
+        "exists), submit an empty steps list. Only use the create_ticket tool."
+    )
+    context = (
+        f"Failed step: {plan.steps[failed_index].tool} "
+        f"({plan.steps[failed_index].intent})\n"
+        f"Error {error.status}: {error.message}\n"
+        f"Originally-remaining steps: {[s.tool for s in remaining]}"
+    )
+    response = model.call(
+        system=revise_system,
+        messages=[{"role": "user", "content": context}],
+        tools=[_submit_plan_tool()],
+    )
+    try:
+        revised_plan = Plan.model_validate(response.tool_input)
+    except ValidationError:
+        return None
+
+    trace.record(
+        EventType.PLAN_REVISED,
+        f"Revised plan: {len(revised_plan.steps)} remaining step(s).",
+        rationale=revised_plan.rationale,
+    )
+    return revised_plan.steps
 
 
 def _run_step(step: PlanStep, *, jira: JiraClient) -> dict:
