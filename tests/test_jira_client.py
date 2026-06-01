@@ -89,6 +89,38 @@ def test_base_url_without_scheme_is_normalized():
     c.close()
 
 
+def test_fetch_all_uses_jql_search_endpoint_and_paginates():
+    # Regression: Atlassian removed /rest/api/3/search (410). fetch_all must use
+    # the token-paginated /search/jql endpoint.
+    seen_paths = []
+    pages = {
+        None: {
+            "issues": [
+                {"key": "KAN-1", "fields": {"summary": "a", "description": None}}
+            ],
+            "nextPageToken": "tok2",
+            "isLast": False,
+        },
+        "tok2": {
+            "issues": [
+                {"key": "KAN-2", "fields": {"summary": "b", "description": None}}
+            ],
+            "isLast": True,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        token = request.url.params.get("nextPageToken")
+        return httpx.Response(200, json=pages[token])
+
+    client = _client_with(handler)
+    results = client.fetch_all()
+
+    assert all(p == "/rest/api/3/search/jql" for p in seen_paths)
+    assert [r["key"] for r in results] == ["KAN-1", "KAN-2"]
+
+
 def test_create_ticket_raises_on_error_status():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, text="bad request")

@@ -116,9 +116,13 @@ class CliHumanClient:
     """Asks via stdin/stdout — the interactive path for the CLI."""
 
     def ask(self, question: str) -> str:
-        print(f"\n[clarification needed] {question}")
+        # Prompt to stderr so it never corrupts the JSON Trace on stdout.
+        import sys
+
+        print(f"\n[clarification needed] {question}", file=sys.stderr)
+        print("> ", end="", file=sys.stderr, flush=True)
         try:
-            return input("> ").strip()
+            return input().strip()
         except EOFError:
             return ""
 
