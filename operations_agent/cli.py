@@ -1,9 +1,14 @@
 """``triage "<text>"`` — the CLI entry point.
 
-Builds a ``BugReport`` from the command line and runs the loop against the real
-Anthropic model client and (for this slice) the in-memory fake Jira client.
-Prints the resulting ``Trace`` as JSON — the same object that will later drive
-the live Rich view and the eval harness.
+Builds a ``BugReport`` from the command line and runs the loop. By default it
+runs *live*: real Anthropic model client + real Jira client, both configured
+from typed ``Settings`` (env / ``.env``), failing fast if anything required is
+missing. Pass ``--offline`` to run the loop without external accounts using the
+in-memory fake Jira client (handy for trying the agent out; the offline path
+grows into the replay mode in Slice 5).
+
+Prints the resulting ``Trace`` as JSON — the same object that later drives the
+live Rich view and the eval harness.
 """
 
 from __future__ import annotations
@@ -12,7 +17,8 @@ import argparse
 import sys
 
 from .agent import run_triage
-from .clients import FakeJiraClient
+from .clients import FakeJiraClient, JiraClient
+from .config import MissingConfigError, Settings
 from .models import BugReport, BugSource
 
 
@@ -24,21 +30,56 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--reporter", default=None, help="Who reported the bug (optional)."
     )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Run without external accounts (fake Jira, no live calls).",
+    )
     args = parser.parse_args(argv)
 
+    settings = Settings()
     bug = BugReport(
         raw_text=args.text, source=BugSource.CLI, reporter=args.reporter
     )
 
-    # Lazy import so `triage --help` works without the SDK/key installed.
-    from .anthropic_client import AnthropicModelClient
-
-    model = AnthropicModelClient()
-    jira = FakeJiraClient()
+    try:
+        model, jira = _build_clients(settings, offline=args.offline)
+    except MissingConfigError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
 
     trace = run_triage(bug, model=model, jira=jira)
     print(trace.model_dump_json(indent=2))
     return 0 if trace.status and trace.status.value == "completed" else 1
+
+
+def _build_clients(settings: Settings, *, offline: bool):
+    """Construct the model + Jira clients, or fail fast naming missing config."""
+    if offline:
+        # Offline still needs the model to plan; only Jira is faked.
+        if not settings.anthropic_api_key:
+            raise MissingConfigError(
+                "Missing required configuration for a live run: "
+                "ANTHROPIC_API_KEY. Copy .env.example to .env and fill it in."
+            )
+        jira: JiraClient = FakeJiraClient()
+    else:
+        settings.require_live()
+        from .jira_client import JiraCloudClient
+
+        jira = JiraCloudClient(
+            base_url=settings.jira_base_url,  # type: ignore[arg-type]
+            email=settings.jira_email,  # type: ignore[arg-type]
+            api_token=settings.jira_api_token,  # type: ignore[arg-type]
+            project_key=settings.jira_project_key,
+        )
+
+    from .anthropic_client import AnthropicModelClient
+
+    model = AnthropicModelClient(
+        model=settings.planning_model, api_key=settings.anthropic_api_key
+    )
+    return model, jira
 
 
 if __name__ == "__main__":
