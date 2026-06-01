@@ -107,8 +107,83 @@ class JiraCloudClient:
             "url": f"{self._client.base_url}/browse/{key}",
         }
 
+    def fetch_all(self, *, page_size: int = 100) -> list[dict[str, Any]]:
+        """Return all issues in the project as {key, summary, description}.
+
+        Used by ``reindex`` to rebuild the local vector index from Jira's
+        current state. Descriptions come back as ADF, which we flatten to text.
+        """
+        results: list[dict[str, Any]] = []
+        start = 0
+        jql = f"project = {self._project_key} ORDER BY created ASC"
+        while True:
+            resp = self._client.get(
+                "/rest/api/3/search",
+                params={
+                    "jql": jql,
+                    "startAt": start,
+                    "maxResults": page_size,
+                    "fields": "summary,description",
+                },
+            )
+            if resp.status_code >= 400:
+                raise JiraError(resp.status_code, resp.text)
+            data = resp.json()
+            for issue in data.get("issues", []):
+                fields = issue.get("fields", {})
+                results.append(
+                    {
+                        "key": issue["key"],
+                        "summary": fields.get("summary", ""),
+                        "description": _adf_to_text(fields.get("description")),
+                    }
+                )
+            start += page_size
+            if start >= data.get("total", 0):
+                break
+        return results
+
     def close(self) -> None:
         self._client.close()
+
+
+def fetch_all_tickets(settings) -> list:
+    """Build a client from settings and return tickets as ``IndexedTicket``s."""
+    from .index import IndexedTicket
+
+    client = JiraCloudClient(
+        base_url=settings.jira_base_url,
+        email=settings.jira_email,
+        api_token=settings.jira_api_token,
+        project_key=settings.jira_project_key,
+    )
+    try:
+        return [
+            IndexedTicket(key=t["key"], summary=t["summary"], text=t["description"])
+            for t in client.fetch_all()
+        ]
+    finally:
+        client.close()
+
+
+def _adf_to_text(adf: Any) -> str:
+    """Flatten an Atlassian Document Format value to plain text (best effort)."""
+    if not isinstance(adf, dict):
+        return ""
+    out: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "text" and isinstance(node.get("text"), str):
+                out.append(node["text"])
+            for child in node.get("content", []) or []:
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(adf)
+    return " ".join(out).strip()
 
 
 def _normalize_base_url(base_url: str) -> str:

@@ -69,6 +69,25 @@ class Settings(BaseSettings):
         description="Cheap model for LLM-as-judge and routine classification.",
     )
 
+    # -- Duplicate detection knobs -- #
+    index_path: str = Field(
+        default="ticket_index.db",
+        description="SQLite file backing the local ticket vector index.",
+    )
+    embedding_model: str = Field(
+        default="all-MiniLM-L6-v2",
+        description="Local sentence-transformers model for embeddings.",
+    )
+    dup_clear_band: float = Field(
+        default=0.75,
+        description="Cosine at/above this + model agrees = a clear duplicate.",
+    )
+    dup_ambiguous_band: float = Field(
+        default=0.55,
+        description="Cosine in [ambiguous, clear) is an ambiguous duplicate "
+        "(Slice 4 asks a human). Below this = novel bug.",
+    )
+
     def require_live(self) -> None:
         """Fail fast (naming the gaps) if anything needed for a live run is unset."""
         required = {

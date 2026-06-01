@@ -15,11 +15,17 @@ NOT here yet — they slot into this same loop in later slices.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pydantic import ValidationError
 
 from .clients import JiraClient, ModelClient
+from .duplicates import find_duplicate
+from .index import IndexedTicket, TicketIndex
 from .models import (
     BugReport,
+    DuplicateClassification,
+    DuplicateVerdict,
     EventType,
     Plan,
     PlanStep,
@@ -27,6 +33,20 @@ from .models import (
     StepStatus,
     Trace,
 )
+
+
+@dataclass
+class DuplicateChecker:
+    """Bundles the index + tuning bands for the duplicate-detection step.
+
+    Optional: pass ``None`` to ``run_triage`` to skip duplicate detection (e.g.
+    the Slice 1 walking-skeleton path and unit tests that don't care about it).
+    """
+
+    index: TicketIndex
+    clear_band: float
+    ambiguous_band: float
+    top_k: int = 5
 
 MAX_PLAN_REPAIRS = 1
 
@@ -64,13 +84,39 @@ def run_triage(
     *,
     model: ModelClient,
     jira: JiraClient,
+    duplicates: DuplicateChecker | None = None,
 ) -> Trace:
     """Triage one bug report end-to-end, returning the full Trace.
 
     This is the seam tests drive: inject a fake/recorded ``model`` and fake tool
     clients, feed a ``BugReport``, and assert on the returned ``Trace``.
+
+    When ``duplicates`` is provided, the agent first checks whether the bug
+    duplicates an indexed ticket and records the verdict. A clear duplicate
+    short-circuits the run (no new ticket is filed). Newly filed tickets are
+    embedded into the index (embed-on-ingest).
     """
     trace = Trace(bug_report=bug_report)
+
+    if duplicates is not None:
+        verdict = _check_duplicate(bug_report, model=model, dup=duplicates)
+        trace.record(
+            EventType.DUPLICATE_CHECK,
+            f"Duplicate check: {verdict.classification.value}.",
+            **verdict.model_dump(),
+        )
+        if verdict.classification is DuplicateClassification.CLEAR:
+            trace.finish(
+                RunStatus.COMPLETED,
+                duplicate_of=verdict.matched_key,
+                filed=False,
+            )
+            trace.record(
+                EventType.RUN_COMPLETED,
+                f"Skipped filing — clear duplicate of {verdict.matched_key}.",
+                duplicate_of=verdict.matched_key,
+            )
+            return trace
 
     plan = _propose_plan(bug_report, model=model, trace=trace)
     if plan is None:
@@ -79,8 +125,21 @@ def run_triage(
         return trace
 
     trace.plan = plan
-    _execute_plan(plan, jira=jira, trace=trace)
+    _execute_plan(plan, jira=jira, trace=trace, duplicates=duplicates)
     return trace
+
+
+def _check_duplicate(
+    bug_report: BugReport, *, model: ModelClient, dup: DuplicateChecker
+) -> DuplicateVerdict:
+    return find_duplicate(
+        bug_report.raw_text,
+        index=dup.index,
+        model=model,
+        clear_band=dup.clear_band,
+        ambiguous_band=dup.ambiguous_band,
+        top_k=dup.top_k,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -158,7 +217,13 @@ def _propose_plan(
 # --------------------------------------------------------------------------- #
 
 
-def _execute_plan(plan: Plan, *, jira: JiraClient, trace: Trace) -> None:
+def _execute_plan(
+    plan: Plan,
+    *,
+    jira: JiraClient,
+    trace: Trace,
+    duplicates: DuplicateChecker | None = None,
+) -> None:
     for step in plan.steps:
         step.status = StepStatus.IN_PROGRESS
         trace.record(
@@ -188,6 +253,17 @@ def _execute_plan(plan: Plan, *, jira: JiraClient, trace: Trace) -> None:
             tool=step.tool,
             result=result,
         )
+
+        # Embed-on-ingest: a newly filed ticket joins the index so future bugs
+        # can be matched against it.
+        if duplicates is not None and step.tool == "create_ticket" and result.get("key"):
+            duplicates.index.add(
+                IndexedTicket(
+                    key=result["key"],
+                    summary=result.get("summary", ""),
+                    text=result.get("description", ""),
+                )
+            )
 
     last = plan.steps[-1].result if plan.steps else {}
     trace.finish(RunStatus.COMPLETED, ticket=last)
