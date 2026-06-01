@@ -6,6 +6,7 @@ skills-lock.json
 # Internal planning docs — kept local, not published
 PRD.md
 context.md
+EXPLAIN.md
 
 # Secrets
 .env
