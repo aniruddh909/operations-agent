@@ -27,11 +27,11 @@ from rich.text import Text
 from .models import EventType, RunStatus, StepStatus, Trace
 
 _STATUS_ICON = {
-    StepStatus.PENDING: ("⏳", "grey50"),
-    StepStatus.IN_PROGRESS: ("⏳", "yellow"),
-    StepStatus.DONE: ("✓", "green"),
-    StepStatus.FAILED: ("✗", "red"),
-    StepStatus.SKIPPED: ("–", "grey50"),
+    StepStatus.PENDING: ("[ ]", "grey50"),
+    StepStatus.IN_PROGRESS: ("[~]", "yellow"),
+    StepStatus.DONE: ("[x]", "green"),
+    StepStatus.FAILED: ("[!]", "red"),
+    StepStatus.SKIPPED: ("[-]", "grey50"),
 }
 
 _LEVEL_STYLE = {"high": "green", "medium": "yellow", "low": "red"}
@@ -78,7 +78,7 @@ def _header(trace: Trace) -> Panel:
     if dup:
         cls = dup.data.get("classification", "?")
         cands = dup.data.get("candidates", [])
-        top = f" — closest {cands[0]['key']} @ {cands[0]['score']}" if cands else ""
+        top = f" - closest {cands[0]['key']} @ {cands[0]['score']}" if cands else ""
         color = {"clear": "red", "ambiguous": "yellow", "none": "green"}.get(cls, "white")
         dup_line = Text.assemble(
             "\nDuplicate check: ", (cls, f"bold {color}"), top
@@ -86,7 +86,7 @@ def _header(trace: Trace) -> Panel:
     body = Text(trace.bug_report.raw_text.strip())
     if dup_line:
         body = Text.assemble(body, dup_line)
-    return Panel(body, title="🐞 Bug report", border_style="cyan", expand=True)
+    return Panel(body, title="Bug report", border_style="cyan", expand=True)
 
 
 def _evidence_table(data: dict) -> Table:
@@ -110,14 +110,14 @@ def _gate_panel(data: dict) -> Panel:
     if action == "ask_human":
         triggered = ", ".join(data.get("triggered", []))
         return Panel(
-            Text(f"ASK HUMAN — low confidence on: {triggered}", style="bold yellow"),
+            Text(f"ASK HUMAN - low confidence on: {triggered}", style="bold yellow"),
             border_style="yellow",
-            title="⚖️  Confidence gate",
+            title="Confidence gate",
         )
     return Panel(
-        Text("PROCEED — confident enough to triage", style="bold green"),
+        Text("PROCEED - confident enough to triage", style="bold green"),
         border_style="green",
-        title="⚖️  Confidence gate",
+        title="Confidence gate",
     )
 
 
@@ -125,20 +125,20 @@ def _clarify_panel(question: str, answer: str | None) -> Panel:
     body = Text.assemble(("Q: ", "bold"), question)
     if answer:
         body = Text.assemble(body, "\n", ("A: ", "bold green"), answer)
-    return Panel(body, border_style="magenta", title="💬 Clarification")
+    return Panel(body, border_style="magenta", title="Clarification")
 
 
 def _plan_panel(trace: Trace) -> Panel:
     table = Table.grid(padding=(0, 1))
-    table.add_column(width=2)
+    table.add_column(width=3)
     table.add_column()
     for step in trace.plan.steps:
         icon, color = _STATUS_ICON.get(step.status, ("?", "white"))
-        label = f"{step.tool} — {step.intent}"
+        label = f"{step.tool} - {step.intent}"
         if step.result and step.result.get("key"):
-            label += f"  →  {step.result['key']}"
+            label += f"  ->  {step.result['key']}"
         table.add_row(Text(icon, style=color), Text(label, style=color))
-    return Panel(table, title="📋 Plan", border_style="blue")
+    return Panel(table, title="Plan", border_style="blue")
 
 
 def _event_line(ev) -> Text:
@@ -148,10 +148,10 @@ def _event_line(ev) -> Text:
         EventType.STEP_RETRY: "orange3",
     }.get(ev.type, "white")
     icon = {
-        EventType.REFLECTION: "↻",
-        EventType.PLAN_REVISED: "✎",
-        EventType.STEP_RETRY: "⟳",
-    }.get(ev.type, "•")
+        EventType.REFLECTION: "[reflect]",
+        EventType.PLAN_REVISED: "[revised]",
+        EventType.STEP_RETRY: "[retry]",
+    }.get(ev.type, "-")
     return Text(f"  {icon} {ev.message}", style=color)
 
 
@@ -159,19 +159,19 @@ def _outcome(trace: Trace) -> Panel:
     if trace.status is RunStatus.COMPLETED:
         o = trace.outcome
         if o.get("filed") is False and o.get("duplicate_of"):
-            msg = Text(f"Done — skipped as duplicate of {o['duplicate_of']}", style="bold green")
+            msg = Text(f"Done - skipped as duplicate of {o['duplicate_of']}", style="bold green")
         else:
             ticket = o.get("ticket") or {}
-            key = ticket.get("key", "—")
+            key = ticket.get("key", "-")
             url = ticket.get("url", "")
-            msg = Text.assemble(("Done — filed ", "bold green"), (key, "bold green"))
+            msg = Text.assemble(("Done - filed ", "bold green"), (key, "bold green"))
             if url:
                 msg = Text.assemble(msg, "\n", (url, "blue underline"))
-        return Panel(msg, border_style="green", title="✅ Outcome")
+        return Panel(msg, border_style="green", title="Outcome")
     return Panel(
-        Text(f"Failed — {trace.outcome.get('reason') or trace.outcome.get('error', '')}", style="bold red"),
+        Text(f"Failed - {trace.outcome.get('reason') or trace.outcome.get('error', '')}", style="bold red"),
         border_style="red",
-        title="❌ Outcome",
+        title="Outcome",
     )
 
 
