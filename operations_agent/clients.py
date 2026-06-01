@@ -96,3 +96,44 @@ class FakeJiraClient:
         }
         self.created.append(ticket)
         return ticket
+
+
+# --------------------------------------------------------------------------- #
+# Human-in-the-loop
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class HumanClient(Protocol):
+    """The seam for asking a human a clarifying question and getting an answer."""
+
+    def ask(self, question: str) -> str:
+        """Put the question to the human and return their answer."""
+        ...
+
+
+class CliHumanClient:
+    """Asks via stdin/stdout — the interactive path for the CLI."""
+
+    def ask(self, question: str) -> str:
+        # Prompt to stderr so it never corrupts the JSON Trace on stdout.
+        import sys
+
+        print(f"\n[clarification needed] {question}", file=sys.stderr)
+        print("> ", end="", file=sys.stderr, flush=True)
+        try:
+            return input().strip()
+        except EOFError:
+            return ""
+
+
+class ScriptedHumanClient:
+    """Returns canned answers in order — for tests and replay."""
+
+    def __init__(self, *answers: str) -> None:
+        self._queue = list(answers)
+        self.asked: list[str] = []
+
+    def ask(self, question: str) -> str:
+        self.asked.append(question)
+        return self._queue.pop(0) if self._queue else ""

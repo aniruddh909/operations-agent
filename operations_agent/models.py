@@ -138,6 +138,63 @@ class DuplicateVerdict(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Evidence & the confidence gate
+# --------------------------------------------------------------------------- #
+
+
+class EvidenceLevel(str, Enum):
+    """How strong/clear the signal is for one evidence dimension.
+
+    ``LOW`` means the agent is NOT confident on that dimension — the gate treats
+    any LOW as a reason to ask a human rather than guess.
+    """
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class EvidenceCheck(BaseModel):
+    """One named evidence dimension: a level plus a one-line justification."""
+
+    level: EvidenceLevel
+    justification: str = Field(description="One line on why this level.")
+
+
+class EvidenceChecks(BaseModel):
+    """The structured evidence behind a triage decision.
+
+    The model supplies ``info_sufficiency``, ``severity_clarity`` and
+    ``component_clarity`` by reading the report. ``duplicate_ambiguity`` is NOT
+    asked of the model — it is derived in our code from the Slice 3 cosine
+    verdict, so confidence is grounded in a concrete signal, not a vibe.
+    """
+
+    info_sufficiency: EvidenceCheck
+    severity_clarity: EvidenceCheck
+    component_clarity: EvidenceCheck
+    duplicate_ambiguity: EvidenceCheck
+
+
+class GateAction(str, Enum):
+    PROCEED = "proceed"
+    ASK_HUMAN = "ask_human"
+
+
+class GateDecision(BaseModel):
+    """The output of the (pure, code-side) confidence-gating policy."""
+
+    action: GateAction
+    triggered: list[str] = Field(
+        default_factory=list,
+        description="Names of the checks that forced an ask_human.",
+    )
+    question: Optional[str] = Field(
+        default=None, description="The clarifying question to put to the human."
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Trace
 # --------------------------------------------------------------------------- #
 
@@ -146,6 +203,10 @@ class EventType(str, Enum):
     """The kinds of things that happen during a run, in order."""
 
     DUPLICATE_CHECK = "duplicate_check"
+    EVIDENCE_SUBMITTED = "evidence_submitted"
+    GATE_DECISION = "gate_decision"
+    HUMAN_ASKED = "human_asked"
+    HUMAN_ANSWERED = "human_answered"
     PLAN_PROPOSED = "plan_proposed"
     PLAN_REPAIR = "plan_repair"
     STEP_STARTED = "step_started"

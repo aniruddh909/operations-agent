@@ -19,11 +19,23 @@ class ScriptedModel:
     repair-retry path.
     """
 
-    def __init__(self, *tool_inputs: dict) -> None:
-        self._queue = list(tool_inputs)
-        self.calls = 0
+    def __init__(self, *plan_inputs: dict) -> None:
+        self._queue = list(plan_inputs)
+        self.calls = 0  # counts plan calls (repair-retry assertions rely on this)
 
     def call(self, *, system, messages, tools) -> ModelResponse:
+        tool = tools[0]["name"]
+        if tool == "submit_evidence":
+            # All-high so the confidence gate proceeds straight to planning;
+            # these tests are about plan validation, not the gate.
+            return ModelResponse(
+                tool_name="submit_evidence",
+                tool_input={
+                    "info_sufficiency": {"level": "high", "justification": "x"},
+                    "severity_clarity": {"level": "high", "justification": "x"},
+                    "component_clarity": {"level": "high", "justification": "x"},
+                },
+            )
         self.calls += 1
         payload = self._queue.pop(0)
         return ModelResponse(tool_name="submit_plan", tool_input=payload)

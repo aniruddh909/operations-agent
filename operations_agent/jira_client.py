@@ -111,21 +111,22 @@ class JiraCloudClient:
         """Return all issues in the project as {key, summary, description}.
 
         Used by ``reindex`` to rebuild the local vector index from Jira's
-        current state. Descriptions come back as ADF, which we flatten to text.
+        current state. Uses the token-paginated ``/search/jql`` endpoint (the
+        old ``/search`` was removed by Atlassian). Descriptions come back as ADF,
+        which we flatten to text.
         """
         results: list[dict[str, Any]] = []
-        start = 0
         jql = f"project = {self._project_key} ORDER BY created ASC"
+        next_token: str | None = None
         while True:
-            resp = self._client.get(
-                "/rest/api/3/search",
-                params={
-                    "jql": jql,
-                    "startAt": start,
-                    "maxResults": page_size,
-                    "fields": "summary,description",
-                },
-            )
+            params: dict[str, Any] = {
+                "jql": jql,
+                "maxResults": page_size,
+                "fields": "summary,description",
+            }
+            if next_token:
+                params["nextPageToken"] = next_token
+            resp = self._client.get("/rest/api/3/search/jql", params=params)
             if resp.status_code >= 400:
                 raise JiraError(resp.status_code, resp.text)
             data = resp.json()
@@ -138,8 +139,8 @@ class JiraCloudClient:
                         "description": _adf_to_text(fields.get("description")),
                     }
                 )
-            start += page_size
-            if start >= data.get("total", 0):
+            next_token = data.get("nextPageToken")
+            if not next_token or data.get("isLast", True):
                 break
         return results
 
