@@ -35,6 +35,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run without external accounts (fake Jira, no live calls).",
     )
+    parser.add_argument(
+        "--no-dedup",
+        action="store_true",
+        help="Skip duplicate detection (no embedding model / index needed).",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -48,7 +53,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {err}", file=sys.stderr)
         return 2
 
-    trace = run_triage(bug, model=model, jira=jira)
+    duplicates = None
+    if not args.no_dedup:
+        duplicates = _build_duplicate_checker(settings)
+
+    trace = run_triage(bug, model=model, jira=jira, duplicates=duplicates)
     print(trace.model_dump_json(indent=2))
     return 0 if trace.status and trace.status.value == "completed" else 1
 
@@ -80,6 +89,22 @@ def _build_clients(settings: Settings, *, offline: bool):
         model=settings.planning_model, api_key=settings.anthropic_api_key
     )
     return model, jira
+
+
+def _build_duplicate_checker(settings: Settings):
+    """Construct the duplicate checker from the local index + config bands."""
+    from .agent import DuplicateChecker
+    from .embeddings import LocalEmbeddingClient
+    from .index import TicketIndex
+
+    index = TicketIndex(
+        settings.index_path, LocalEmbeddingClient(settings.embedding_model)
+    )
+    return DuplicateChecker(
+        index=index,
+        clear_band=settings.dup_clear_band,
+        ambiguous_band=settings.dup_ambiguous_band,
+    )
 
 
 if __name__ == "__main__":

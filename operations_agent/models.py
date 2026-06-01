@@ -99,6 +99,45 @@ class Plan(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Duplicate detection
+# --------------------------------------------------------------------------- #
+
+
+class DuplicateClassification(str, Enum):
+    """How confident we are that the incoming bug duplicates an existing one.
+
+    Derived from the retrieval cosine score against the configured bands, then
+    confirmed by the model. In Slice 4 ``AMBIGUOUS`` is what drives the
+    confidence gate to ask a human.
+    """
+
+    CLEAR = "clear"  # high similarity + model agrees: it's a duplicate
+    AMBIGUOUS = "ambiguous"  # mid similarity: unsure, worth a human's eye
+    NONE = "none"  # low similarity / model says different: novel bug
+
+
+class DuplicateCandidate(BaseModel):
+    """One retrieved existing ticket considered as a possible duplicate."""
+
+    key: str
+    summary: str
+    score: float = Field(description="Cosine similarity to the incoming bug.")
+
+
+class DuplicateVerdict(BaseModel):
+    """The outcome of duplicate detection for one incoming bug."""
+
+    classification: DuplicateClassification
+    candidates: list[DuplicateCandidate] = Field(default_factory=list)
+    matched_key: Optional[str] = Field(
+        default=None, description="The duplicate ticket key, if one was found."
+    )
+    reasoning: str = Field(
+        default="", description="The model's justification for the verdict."
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Trace
 # --------------------------------------------------------------------------- #
 
@@ -106,6 +145,7 @@ class Plan(BaseModel):
 class EventType(str, Enum):
     """The kinds of things that happen during a run, in order."""
 
+    DUPLICATE_CHECK = "duplicate_check"
     PLAN_PROPOSED = "plan_proposed"
     PLAN_REPAIR = "plan_repair"
     STEP_STARTED = "step_started"

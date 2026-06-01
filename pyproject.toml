@@ -11,12 +11,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Local embeddings for duplicate detection. Optional so tests / basic triage
+# don't pull in torch; install with `pip install -e ".[embeddings]"`.
+embeddings = [
+    "sentence-transformers>=2.7",
+]
 dev = [
     "pytest>=8.0",
 ]
 
 [project.scripts]
 triage = "operations_agent.cli:main"
+ops-seed = "operations_agent.seed_cli:seed_main"
+ops-reindex = "operations_agent.seed_cli:reindex_main"
 
 [build-system]
 requires = ["setuptools>=68"]
