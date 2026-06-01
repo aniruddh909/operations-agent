@@ -14,12 +14,13 @@ import pytest
 from operations_agent.jira_client import JiraCloudClient, JiraError
 
 
-def _client_with(handler) -> JiraCloudClient:
+def _client_with(handler, **kwargs) -> JiraCloudClient:
     client = JiraCloudClient(
         base_url="https://example.atlassian.net",
         email="a@b.com",
         api_token="tok",
         project_key="OPS",
+        **kwargs,
     )
     client._client = httpx.Client(
         base_url="https://example.atlassian.net",
@@ -28,13 +29,14 @@ def _client_with(handler) -> JiraCloudClient:
     return client
 
 
-def test_create_ticket_builds_request_and_returns_key():
+def test_create_ticket_default_encodes_triage_as_labels():
+    # Default (portable) path: priority + component become labels, so it works
+    # on team-managed projects that lack a native Priority field.
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         import json
 
-        captured["url"] = str(request.url)
         captured["body"] = json.loads(request.content)
         return httpx.Response(201, json={"key": "OPS-42"})
 
@@ -43,18 +45,48 @@ def test_create_ticket_builds_request_and_returns_key():
         summary="Login crash",
         description="crashes on login",
         priority="P1",
-        component="auth",
+        component="auth service",
     )
 
     assert result["key"] == "OPS-42"
     assert result["priority"] == "P1"
-    assert "OPS-42" in result["url"]
     fields = captured["body"]["fields"]
     assert fields["project"]["key"] == "OPS"
+    assert fields["issuetype"]["name"] == "Bug"
+    assert "priority" not in fields  # not sent natively
+    assert "priority-P1" in fields["labels"]
+    assert "component-auth-service" in fields["labels"]
+    assert fields["description"]["type"] == "doc"  # ADF-wrapped
+
+
+def test_create_ticket_native_priority_when_enabled():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"key": "OPS-7"})
+
+    client = _client_with(handler, use_native_priority=True)
+    client.create_ticket(
+        summary="x", description="y", priority="P1", component="auth"
+    )
+
+    fields = captured["body"]["fields"]
     assert fields["priority"]["name"] == "High"  # P1 -> High
     assert fields["components"] == [{"name": "auth"}]
-    # description is wrapped in ADF
-    assert fields["description"]["type"] == "doc"
+
+
+def test_base_url_without_scheme_is_normalized():
+    c = JiraCloudClient(
+        base_url="site.atlassian.net",
+        email="a@b.com",
+        api_token="tok",
+        project_key="OPS",
+    )
+    assert str(c._client.base_url).startswith("https://site.atlassian.net")
+    c.close()
 
 
 def test_create_ticket_raises_on_error_status():
