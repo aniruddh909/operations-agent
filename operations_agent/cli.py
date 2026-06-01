@@ -17,7 +17,7 @@ import argparse
 import sys
 
 from .agent import run_triage
-from .clients import FakeJiraClient, JiraClient
+from .clients import CliHumanClient, FakeJiraClient, JiraClient
 from .config import MissingConfigError, Settings
 from .models import BugReport, BugSource
 
@@ -57,7 +57,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_dedup:
         duplicates = _build_duplicate_checker(settings)
 
-    trace = run_triage(bug, model=model, jira=jira, duplicates=duplicates)
+    human = CliHumanClient()  # asks via stdin when the gate needs clarification
+
+    trace = run_triage(
+        bug, model=model, jira=jira, duplicates=duplicates, human=human
+    )
     print(trace.model_dump_json(indent=2))
     return 0 if trace.status and trace.status.value == "completed" else 1
 

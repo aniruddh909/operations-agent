@@ -19,14 +19,17 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from .clients import JiraClient, ModelClient
+from .clients import HumanClient, JiraClient, ModelClient
 from .duplicates import find_duplicate
+from .evidence import collect_evidence
+from .gate import gate
 from .index import IndexedTicket, TicketIndex
 from .models import (
     BugReport,
     DuplicateClassification,
     DuplicateVerdict,
     EventType,
+    GateAction,
     Plan,
     PlanStep,
     RunStatus,
@@ -85,19 +88,21 @@ def run_triage(
     model: ModelClient,
     jira: JiraClient,
     duplicates: DuplicateChecker | None = None,
+    human: HumanClient | None = None,
 ) -> Trace:
     """Triage one bug report end-to-end, returning the full Trace.
 
     This is the seam tests drive: inject a fake/recorded ``model`` and fake tool
     clients, feed a ``BugReport``, and assert on the returned ``Trace``.
 
-    When ``duplicates`` is provided, the agent first checks whether the bug
-    duplicates an indexed ticket and records the verdict. A clear duplicate
-    short-circuits the run (no new ticket is filed). Newly filed tickets are
+    Flow: duplicate check (Slice 3) -> evidence assessment + confidence gate
+    (Slice 4) -> optional clarifying question to a human -> plan -> execute. A
+    clear duplicate short-circuits before any filing; newly filed tickets are
     embedded into the index (embed-on-ingest).
     """
     trace = Trace(bug_report=bug_report)
 
+    verdict: DuplicateVerdict | None = None
     if duplicates is not None:
         verdict = _check_duplicate(bug_report, model=model, dup=duplicates)
         trace.record(
@@ -118,7 +123,45 @@ def run_triage(
             )
             return trace
 
-    plan = _propose_plan(bug_report, model=model, trace=trace)
+    # Evidence assessment + the (pure, code-side) confidence gate.
+    clarification: str | None = None
+    evidence = collect_evidence(
+        bug_report.raw_text, model=model, duplicate=verdict
+    )
+    trace.record(
+        EventType.EVIDENCE_SUBMITTED,
+        "Evidence assessed.",
+        **evidence.model_dump(),
+    )
+    decision = gate(evidence)
+    trace.record(
+        EventType.GATE_DECISION,
+        f"Gate: {decision.action.value}.",
+        **decision.model_dump(),
+    )
+
+    if decision.action is GateAction.ASK_HUMAN:
+        if human is None:
+            # No way to ask — fail rather than guess what we said we wouldn't.
+            trace.finish(
+                RunStatus.FAILED,
+                reason="clarification needed but no human available",
+                triggered=decision.triggered,
+            )
+            trace.record(
+                EventType.RUN_FAILED,
+                "Needed clarification but no human client was provided.",
+            )
+            return trace
+        trace.record(
+            EventType.HUMAN_ASKED, decision.question or "", triggered=decision.triggered
+        )
+        clarification = human.ask(decision.question or "")
+        trace.record(EventType.HUMAN_ANSWERED, clarification)
+
+    plan = _propose_plan(
+        bug_report, model=model, trace=trace, clarification=clarification
+    )
     if plan is None:
         trace.finish(RunStatus.FAILED, reason="could not produce a valid plan")
         trace.record(EventType.RUN_FAILED, "No valid plan after repair-retry.")
@@ -152,11 +195,15 @@ def _propose_plan(
     *,
     model: ModelClient,
     trace: Trace,
+    clarification: str | None = None,
 ) -> Plan | None:
     tools = [_submit_plan_tool()]
-    messages: list[dict] = [
-        {"role": "user", "content": f"Bug report:\n\n{bug_report.raw_text}"}
-    ]
+    content = f"Bug report:\n\n{bug_report.raw_text}"
+    if clarification:
+        # Fold the human's answer into the planning context so the plan
+        # reflects it (this is why we asked).
+        content += f"\n\nClarification from the reporter:\n{clarification}"
+    messages: list[dict] = [{"role": "user", "content": content}]
 
     for attempt in range(MAX_PLAN_REPAIRS + 1):
         response = model.call(

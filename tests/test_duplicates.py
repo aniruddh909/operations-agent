@@ -96,16 +96,21 @@ def test_novel_bug_runs_planning_and_embeds_on_ingest(tmp_path):
     jira = FakeJiraClient()
     dup = DuplicateChecker(index=idx, clear_band=0.9, ambiguous_band=0.85)
 
-    # First model call = dup verdict (not used, novel short-circuits before it
-    # only if below band; here we force novel via high bands so no adjudication),
-    # then the plan. Scripted to return a plan on the planning call.
+    # High bands => novel (no adjudication call). The model is then asked for
+    # evidence (all-high so the gate proceeds), then the plan.
     class TwoStep:
         def __init__(self):
             self.calls = 0
 
         def call(self, *, system, messages, tools):
             self.calls += 1
-            # Only the planning tool is offered here (novel path skips adjudication)
+            tool = tools[0]["name"]
+            if tool == "submit_evidence":
+                return ModelResponse(tool_name="submit_evidence", tool_input={
+                    "info_sufficiency": {"level": "high", "justification": "x"},
+                    "severity_clarity": {"level": "high", "justification": "x"},
+                    "component_clarity": {"level": "high", "justification": "x"},
+                })
             return ModelResponse(tool_name="submit_plan", tool_input={
                 "rationale": "Novel bug, file it.",
                 "steps": [{"tool": "create_ticket", "intent": "file",
