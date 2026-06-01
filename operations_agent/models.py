@@ -21,9 +21,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 def _utcnow() -> datetime:
@@ -250,6 +250,19 @@ class Trace(BaseModel):
     started_at: datetime = Field(default_factory=_utcnow)
     finished_at: Optional[datetime] = None
 
+    # An optional observer notified after every mutation, so a live renderer can
+    # react without the Trace knowing anything about rendering. Excluded from
+    # serialization — the Trace stays a pure data object on disk/JSON.
+    _observer: Optional[Callable[["Trace"], None]] = PrivateAttr(default=None)
+
+    def observe(self, observer: Callable[["Trace"], None]) -> None:
+        """Register a callback fired after each record()/finish() (for rendering)."""
+        self._observer = observer
+
+    def _notify(self) -> None:
+        if self._observer is not None:
+            self._observer(self)
+
     # -- recording helpers (keep mutation in one place) -- #
 
     def record(
@@ -260,9 +273,11 @@ class Trace(BaseModel):
     ) -> TraceEvent:
         event = TraceEvent(type=type, message=message, data=data)
         self.events.append(event)
+        self._notify()
         return event
 
     def finish(self, status: RunStatus, **outcome: Any) -> None:
         self.status = status
         self.outcome = outcome
         self.finished_at = _utcnow()
+        self._notify()
