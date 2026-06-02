@@ -58,11 +58,21 @@ regressions (`compare()` in `operations_agent/evaluation/harness.py`).
 - **From-scratch agent loop** on the raw Anthropic SDK - plan-then-execute with a
   reflection step; structured output via tool-use + Pydantic validation + one
   bounded repair-retry.
-- **Tiered models** (configurable IDs): a strong model for planning, reasoning,
-  and duplicate adjudication; a cheap model for the LLM-as-judge pass; a local
-  embedding model for retrieval.
 - **The `Trace`** is the single source of truth - it drives live rendering, saved
   artifacts, and the eval harness from one backbone.
+- **Entry-point boundary** - triggers (CLI, Slack) construct the same `BugReport`
+  that feeds the same loop. Adding Slack was a thin adapter, not a loop change.
+
+### Why each model
+
+| Role | Model | Why |
+| --- | --- | --- |
+| Planning, reasoning, duplicate adjudication | Strong (Claude Sonnet) | The hard judgment calls - worth the better model |
+| LLM-as-judge (eval) | Cheap (Claude Haiku) | Grading is a simpler, high-volume task; keep eval runs cheap |
+| Embeddings (duplicate retrieval) | Local sentence-transformers | Free, offline, and recruiter-reproducible; no per-call cost |
+
+Model IDs are config values, so the eval harness can compare two versions on the
+same golden set.
 
 ### Two-tier error handling
 
@@ -79,12 +89,17 @@ pytest.
 
 ## Running it
 
+There are two run modes.
+
+**Full live** (bring your own accounts - real triage end to end):
+
 ```bash
 pip install -e ".[embeddings]"      # local embeddings for duplicate detection
 cp .env.example .env                # fill in API keys (see below)
+ops-seed                            # seed the fixture backlog into Jira + index (once)
 triage "your bug report text"       # triage a bug, live
 triage "..." --live                 # with the live reasoning view
-ops-seed                            # seed the fixture backlog into Jira + index
+triage "..." --save-trace out.json  # save a redacted Trace artifact
 ops-eval                            # run the golden-set evaluation
 ```
 
@@ -92,13 +107,27 @@ Required config (`.env`): `ANTHROPIC_API_KEY`, plus `JIRA_BASE_URL`,
 `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` for live filing. Optional:
 `SLACK_WEBHOOK_URL`. Missing required vars fail fast with a clear message.
 
-Tuning knobs (also in config): confidence behavior, the two cosine bands
+**Replay / offline** (no external accounts, ~60s): record a run once, then replay
+it deterministically against fake clients - no model API calls, nothing to set
+up. Useful for demos and for seeing the agent work without keys.
+
+```bash
+triage "..." --record run.cassette  # record model responses during a live run
+triage "..." --replay run.cassette --offline   # replay later with fakes, no network
+```
+
+A committed sample redacted Trace lives at `traces/sample-redacted.json`.
+
+A bug can also enter via the **Slack adapter** (`operations_agent/slack_adapter.py`),
+which turns a slash-command or Events-API payload into the same `BugReport`.
+
+Tuning knobs (in config): confidence behavior, the two cosine bands
 (clear-dup / ambiguous), and the tiered model IDs.
 
 ## Tests
 
 ```bash
-pytest        # ~49 tests, no network (fake model + fake clients)
+pytest        # 56 tests, no network (fake model + fake clients)
 ```
 
 Tests assert on the `Trace` (the agent's external behavior), not on internal call

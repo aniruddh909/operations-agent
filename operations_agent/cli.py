@@ -63,6 +63,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Render the agent's reasoning live in the terminal (Rich view).",
     )
+    parser.add_argument(
+        "--save-trace",
+        metavar="PATH",
+        default=None,
+        help="Save a redacted Trace (secrets stripped) to PATH as a shareable "
+        "artifact. Add --scrub-text to also remove bug/ticket free text.",
+    )
+    parser.add_argument(
+        "--scrub-text",
+        action="store_true",
+        help="With --save-trace, also scrub free-text content fields.",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -109,6 +121,17 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     print(trace.model_dump_json(indent=2))
+
+    if args.save_trace:
+        import json
+
+        from .redact import redact_trace
+
+        redacted = redact_trace(trace, scrub_text=args.scrub_text)
+        with open(args.save_trace, "w") as fh:
+            json.dump(redacted, fh, indent=2)
+        print(f"Saved redacted trace to {args.save_trace}", file=sys.stderr)
+
     return 0 if trace.status and trace.status.value == "completed" else 1
 
 
