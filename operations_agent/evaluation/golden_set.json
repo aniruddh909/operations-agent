@@ -1,0 +1,159 @@
+[
+  {
+    "id": "dup-login-clear-1",
+    "dimension": "clear-dup",
+    "raw_text": "The application crashes immediately every time I sign in with my correct username and password. It happens on every single login attempt.",
+    "expect_duplicate": "clear",
+    "expect_filed": false
+  },
+  {
+    "id": "dup-login-clear-2",
+    "dimension": "clear-dup",
+    "raw_text": "Signing in makes the whole app close instantly. Enter credentials, hit sign in, and it dies. Reproduces 100% of the time.",
+    "expect_duplicate": "clear",
+    "expect_filed": false
+  },
+  {
+    "id": "dup-email-clear-1",
+    "dimension": "clear-dup",
+    "raw_text": "Password reset emails never arrive. Users request a reset and the email is never delivered, so they can't get the reset link.",
+    "expect_duplicate": "clear",
+    "expect_filed": false
+  },
+  {
+    "id": "dup-dashboard-ambiguous-1",
+    "dimension": "ambiguous-dup",
+    "raw_text": "The analytics area feels sluggish lately when I open it.",
+    "expect_gate": "ask_human",
+    "expect_duplicate": "ambiguous"
+  },
+  {
+    "id": "dup-login-ambiguous-1",
+    "dimension": "ambiguous-dup",
+    "raw_text": "Something goes wrong around the sign-in screen sometimes.",
+    "expect_gate": "ask_human",
+    "expect_duplicate": "ambiguous"
+  },
+  {
+    "id": "novel-2fa-1",
+    "dimension": "novel",
+    "raw_text": "Two-factor SMS codes arrive 5-10 minutes late and have already expired by the time they reach the user, so they get locked out. Repro: enable 2FA, log out, request an SMS code. Expected: code within seconds. Actual: arrives after expiry. Affects all users on the EU number pool.",
+    "expect_duplicate": "none",
+    "expect_filed": true,
+    "expect_gate": "proceed",
+    "expect_component": "auth"
+  },
+  {
+    "id": "novel-billing-1",
+    "dimension": "novel",
+    "raw_text": "Annual subscription invoices show the wrong tax rate for customers in Germany - they are charged 7% VAT instead of 19%. Repro: create a DE customer, generate an annual invoice. Expected: 19% VAT. Actual: 7%. Every DE invoice is affected.",
+    "expect_duplicate": "none",
+    "expect_filed": true,
+    "expect_gate": "proceed",
+    "expect_component": "billing"
+  },
+  {
+    "id": "novel-mobile-1",
+    "dimension": "novel",
+    "raw_text": "On the iOS app, pull-to-refresh on the feed throws a crash if you pull while a previous refresh is still in flight. Repro: open feed, pull to refresh twice quickly. Expected: second pull ignored. Actual: hard crash. Reproducible on iOS 17.",
+    "expect_duplicate": "none",
+    "expect_filed": true,
+    "expect_gate": "proceed",
+    "expect_component": "mobile"
+  },
+  {
+    "id": "insufficient-1",
+    "dimension": "insufficient-info",
+    "raw_text": "It's broken.",
+    "expect_gate": "ask_human"
+  },
+  {
+    "id": "insufficient-2",
+    "dimension": "insufficient-info",
+    "raw_text": "Doesn't work, please fix.",
+    "expect_gate": "ask_human"
+  },
+  {
+    "id": "insufficient-3",
+    "dimension": "insufficient-info",
+    "raw_text": "Error on the page.",
+    "expect_gate": "ask_human"
+  },
+  {
+    "id": "clear-p1-1",
+    "dimension": "clear-P1",
+    "raw_text": "Checkout is completely down: every attempt to pay returns a 500 error, so no customer can complete a purchase. Started 20 minutes ago, affects 100% of checkouts across all regions. Repro: add item to cart, go to checkout, pay. Expected: order placed. Actual: 500.",
+    "expect_duplicate": "none",
+    "expect_filed": true,
+    "expect_gate": "proceed",
+    "expect_priority": "P0",
+    "expect_component": "checkout"
+  },
+  {
+    "id": "clear-p1-2",
+    "dimension": "clear-P1",
+    "raw_text": "Data loss: saving a document silently drops the last paragraph for all users. Repro: open any doc, add a paragraph, save, reload - the paragraph is gone. Confirmed across accounts. Users are losing work.",
+    "expect_duplicate": "none",
+    "expect_filed": true,
+    "expect_gate": "proceed",
+    "expect_priority": "P1",
+    "expect_component": "editor"
+  },
+  {
+    "id": "clear-p1-3",
+    "dimension": "clear-P1",
+    "raw_text": "Security: any logged-in user can view other users' invoices by changing the invoice ID in the URL. No authorization check. Repro: open /invoices/123, change to /invoices/124, you see someone else's invoice. Confirmed.",
+    "expect_duplicate": "none",
+    "expect_filed": true,
+    "expect_gate": "proceed",
+    "expect_priority": "P0",
+    "expect_component": "billing"
+  },
+  {
+    "id": "ambiguous-priority-1",
+    "dimension": "ambiguous-priority",
+    "raw_text": "The settings page has a bug somewhere, it doesn't feel right when I use it.",
+    "expect_gate": "ask_human"
+  },
+  {
+    "id": "ambiguous-priority-2",
+    "dimension": "ambiguous-priority",
+    "raw_text": "There's an issue with notifications, not sure how bad it is.",
+    "expect_gate": "ask_human"
+  },
+  {
+    "id": "novel-search-1",
+    "dimension": "novel",
+    "raw_text": "Search autocomplete suggestions are case-sensitive: typing 'iphone' returns nothing but 'iPhone' works. Repro: search bar, type lowercase brand names. Expected: case-insensitive matches. Actual: no suggestions. Reproducible for all lowercase queries.",
+    "expect_duplicate": "none",
+    "expect_filed": true,
+    "expect_gate": "proceed",
+    "expect_component": "search"
+  },
+  {
+    "id": "novel-export-1",
+    "dimension": "novel",
+    "raw_text": "PDF export of a report cuts off the last page when the report is longer than 10 pages. Repro: generate a 12-page report, export to PDF. Expected: 12 pages. Actual: 10 pages, last two missing. Reproducible above the 10-page threshold.",
+    "expect_duplicate": "none",
+    "expect_filed": true,
+    "expect_gate": "proceed",
+    "expect_component": "export"
+  },
+  {
+    "id": "clear-p1-4",
+    "dimension": "clear-P1",
+    "raw_text": "Outage: the API gateway is returning 503 for all authenticated endpoints, so the entire product is unusable for every customer right now. Started 5 minutes ago. Repro: any API call with a valid token returns 503.",
+    "expect_duplicate": "none",
+    "expect_filed": true,
+    "expect_gate": "proceed",
+    "expect_priority": "P0",
+    "expect_component": "api"
+  },
+  {
+    "id": "dup-dashboard-clear-1",
+    "dimension": "clear-dup",
+    "raw_text": "The dashboard takes forever to load - over twenty seconds of spinner before any chart appears when I navigate to it.",
+    "expect_duplicate": "clear",
+    "expect_filed": false
+  }
+]

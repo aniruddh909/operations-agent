@@ -25,6 +25,7 @@ dev = [
 triage = "operations_agent.cli:main"
 ops-seed = "operations_agent.seed_cli:seed_main"
 ops-reindex = "operations_agent.seed_cli:reindex_main"
+ops-eval = "operations_agent.eval_cli:eval_main"
 
 [build-system]
 requires = ["setuptools>=68"]
