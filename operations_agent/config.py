@@ -54,6 +54,11 @@ class Settings(BaseSettings):
         default=None,
         description="Atlassian API token. Env: JIRA_API_TOKEN",
     )
+    slack_webhook_url: str | None = Field(
+        default=None,
+        description="Slack Incoming Webhook URL for notifications (optional). "
+        "Env: SLACK_WEBHOOK_URL",
+    )
 
     # -- Tunable knobs (safe defaults) -- #
     jira_project_key: str = Field(

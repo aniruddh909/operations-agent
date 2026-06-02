@@ -17,7 +17,13 @@ import argparse
 import sys
 
 from .agent import run_triage
-from .clients import CliHumanClient, FakeJiraClient, JiraClient
+from .clients import (
+    CliHumanClient,
+    FakeJiraClient,
+    FakeSlackClient,
+    JiraClient,
+    SlackClient,
+)
 from .config import MissingConfigError, Settings
 from .models import BugReport, BugSource
 
@@ -83,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_dedup:
         duplicates = _build_duplicate_checker(settings)
 
+    slack = _build_slack(settings, offline=args.offline)
+
     if args.live:
         from .render import live_render
 
@@ -91,12 +99,13 @@ def main(argv: list[str] | None = None) -> int:
             # the display to ask a clarifying question, then resumes).
             trace = run_triage(
                 bug, model=model, jira=jira, duplicates=duplicates,
-                human=renderer, observer=renderer,
+                slack=slack, human=renderer, observer=renderer,
             )
     else:
         human = CliHumanClient()  # asks via stdin
         trace = run_triage(
-            bug, model=model, jira=jira, duplicates=duplicates, human=human
+            bug, model=model, jira=jira, duplicates=duplicates,
+            slack=slack, human=human,
         )
 
     print(trace.model_dump_json(indent=2))
@@ -146,6 +155,21 @@ def _build_duplicate_checker(settings: Settings):
         clear_band=settings.dup_clear_band,
         ambiguous_band=settings.dup_ambiguous_band,
     )
+
+
+def _build_slack(settings: Settings, *, offline: bool) -> SlackClient | None:
+    """Real Slack webhook client if configured; fake when offline; else None.
+
+    None is fine — the notify_slack step records intent without failing when no
+    Slack is configured.
+    """
+    if offline:
+        return FakeSlackClient()
+    if settings.slack_webhook_url:
+        from .slack_client import SlackWebhookClient
+
+        return SlackWebhookClient(settings.slack_webhook_url)
+    return None
 
 
 if __name__ == "__main__":
