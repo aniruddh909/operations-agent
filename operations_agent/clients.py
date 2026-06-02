@@ -137,3 +137,28 @@ class ScriptedHumanClient:
     def ask(self, question: str) -> str:
         self.asked.append(question)
         return self._queue.pop(0) if self._queue else ""
+
+
+# --------------------------------------------------------------------------- #
+# Slack notifications
+# --------------------------------------------------------------------------- #
+
+
+@runtime_checkable
+class SlackClient(Protocol):
+    """The seam for posting a message to Slack."""
+
+    def post(self, text: str) -> dict[str, Any]:
+        """Post ``text`` and return at least ``{"ok": bool}``."""
+        ...
+
+
+class FakeSlackClient:
+    """In-memory Slack for tests and offline runs; records posted messages."""
+
+    def __init__(self) -> None:
+        self.posted: list[str] = []
+
+    def post(self, text: str) -> dict[str, Any]:
+        self.posted.append(text)
+        return {"ok": True, "text": text}

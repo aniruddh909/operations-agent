@@ -22,12 +22,13 @@ from pydantic import ValidationError
 import time
 from typing import Callable
 
-from .clients import HumanClient, JiraClient, ModelClient
+from .clients import HumanClient, JiraClient, ModelClient, SlackClient
 from .duplicates import find_duplicate
 from .errors import SemanticError, TransientError
 from .evidence import collect_evidence
 from .gate import gate
 from .index import IndexedTicket, TicketIndex
+from .summary import generate_summary
 from .models import (
     BugReport,
     DuplicateClassification,
@@ -68,18 +69,39 @@ class DuplicateChecker:
     ambiguous_band: float
     top_k: int = 5
 
+
+@dataclass
+class _ExecState:
+    """Mutable state threaded through plan execution.
+
+    Lets later steps consume earlier ones' outputs (generate_triage_summary
+    reads the filed ticket; notify_slack reads the generated summary) without
+    the planner having to pass data between steps explicitly.
+    """
+
+    model: ModelClient
+    jira: JiraClient
+    slack: SlackClient | None = None
+    last_ticket: dict | None = None
+    last_summary: str | None = None
+
 MAX_PLAN_REPAIRS = 1
 
 SYSTEM_PROMPT = """You are a product-operations triage agent. Given a raw bug \
-report, produce an explicit plan to triage it and file a ticket.
+report, produce an explicit plan to triage it, file a ticket, and notify the team.
 
-Respond by calling the `submit_plan` tool exactly once. The plan must contain an \
-ordered list of steps. For this slice the only tool a step may use is \
-`create_ticket`, whose args are: summary (str), description (str), \
-priority (one of P0/P1/P2/P3), and component (str, optional).
+Respond by calling the `submit_plan` tool exactly once. The plan is an ordered \
+list of steps. Available tools for a step:
+- `create_ticket` — args: summary (str), description (str), priority \
+(P0/P1/P2/P3), component (str, optional). File the bug.
+- `generate_triage_summary` — no args needed; writes a short summary of the \
+ticket that was just filed earlier in the plan.
+- `notify_slack` — no args needed; posts the generated summary to Slack.
 
-Keep the plan minimal: usually a single `create_ticket` step. Choose a sensible \
-priority and component from the report."""
+A typical plan is: create_ticket, then generate_triage_summary, then \
+notify_slack. Choose a sensible priority and component from the report. Order \
+matters: summary must come after create_ticket, and notify_slack after the \
+summary."""
 
 
 def _submit_plan_tool() -> dict:
@@ -106,6 +128,7 @@ def run_triage(
     jira: JiraClient,
     duplicates: DuplicateChecker | None = None,
     human: HumanClient | None = None,
+    slack: SlackClient | None = None,
     retry_config: RetryConfig | None = None,
     observer: Callable[[Trace], None] | None = None,
 ) -> Trace:
@@ -192,10 +215,10 @@ def run_triage(
         return trace
 
     trace.plan = plan
+    state = _ExecState(model=model, jira=jira, slack=slack)
     _execute_plan(
         plan,
-        model=model,
-        jira=jira,
+        state=state,
         trace=trace,
         duplicates=duplicates,
         retry_config=retry_config,
@@ -298,8 +321,7 @@ def _propose_plan(
 def _execute_plan(
     plan: Plan,
     *,
-    model: ModelClient,
-    jira: JiraClient,
+    state: _ExecState,
     trace: Trace,
     duplicates: DuplicateChecker | None = None,
     retry_config: RetryConfig | None = None,
@@ -323,7 +345,7 @@ def _execute_plan(
 
         try:
             result = _run_step_with_retry(
-                step, jira=jira, trace=trace, retry_config=retry_config
+                step, state=state, trace=trace, retry_config=retry_config
             )
         except SemanticError as err:
             # Reality diverged in a way the agent should reason about.
@@ -347,7 +369,7 @@ def _execute_plan(
                 return
             reflections += 1
             revised = _reflect_and_revise(
-                plan, failed_index=i, error=err, model=model, trace=trace
+                plan, failed_index=i, error=err, model=state.model, trace=trace
             )
             if revised is None:
                 trace.finish(
@@ -396,16 +418,17 @@ def _execute_plan(
             )
         i += 1
 
-    done = [s for s in plan.steps if s.status is StepStatus.DONE]
-    last = done[-1].result if done else {}
-    trace.finish(RunStatus.COMPLETED, ticket=last)
-    trace.record(EventType.RUN_COMPLETED, "Triage complete.", ticket=last)
+    ticket = state.last_ticket or {}
+    trace.finish(
+        RunStatus.COMPLETED, ticket=ticket, notified=state.last_summary is not None
+    )
+    trace.record(EventType.RUN_COMPLETED, "Triage complete.", ticket=ticket)
 
 
 def _run_step_with_retry(
     step: PlanStep,
     *,
-    jira: JiraClient,
+    state: _ExecState,
     trace: Trace,
     retry_config: RetryConfig,
 ) -> dict:
@@ -421,7 +444,7 @@ def _run_step_with_retry(
         )
 
     return call_with_retry(
-        lambda: _run_step(step, jira=jira),
+        lambda: _run_step(step, state=state),
         max_retries=retry_config.max_retries,
         base_delay=retry_config.base_delay,
         max_delay=retry_config.max_delay,
@@ -480,12 +503,35 @@ def _reflect_and_revise(
     return revised_plan.steps
 
 
-def _run_step(step: PlanStep, *, jira: JiraClient) -> dict:
+def _run_step(step: PlanStep, *, state: _ExecState) -> dict:
     if step.tool == "create_ticket":
-        return jira.create_ticket(
+        ticket = state.jira.create_ticket(
             summary=step.args.get("summary", ""),
             description=step.args.get("description", ""),
             priority=step.args.get("priority", "P3"),
             component=step.args.get("component"),
         )
+        state.last_ticket = ticket
+        return ticket
+
+    if step.tool == "generate_triage_summary":
+        if not state.last_ticket:
+            raise UnknownToolError(
+                "generate_triage_summary requires a ticket filed earlier."
+            )
+        summary = generate_summary(state.last_ticket, model=state.model)
+        state.last_summary = summary
+        return {"summary": summary}
+
+    if step.tool == "notify_slack":
+        if state.slack is None:
+            # No Slack configured: record intent without failing the run.
+            return {"posted": False, "reason": "no slack client configured",
+                    "summary": state.last_summary}
+        text = state.last_summary or (
+            state.last_ticket.get("summary") if state.last_ticket else ""
+        )
+        result = state.slack.post(text or "A bug ticket was triaged.")
+        return {"posted": bool(result.get("ok")), "text": text}
+
     raise UnknownToolError(f"Unknown tool: {step.tool}")
